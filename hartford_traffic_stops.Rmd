@@ -1,0 +1,149 @@
+---
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Load neccessary dependencies
+
+library(tidyverse)
+library(sf)
+library(fs)
+library(ggthemes)
+library(lubridate)
+library(stringr)
+library(gt)
+library(gganimate)
+library(devtools)
+library(transformr)
+
+```
+
+
+```{r data, echo=FALSE, cache=TRUE}
+
+# Obtain rds file for stops in Hartford, which can be read in directly from the website
+
+hartford <- read_rds(url("https://stacks.stanford.edu/file/druid:tr137st9964/tr137st9964_ct_hartford_2019_02_25.rds"))
+
+# Download compressed shapefile
+
+download.file(url = "https://stacks.stanford.edu/file/druid:tr137st9964/tr137st9964_ct_hartford_shapefiles_2019_02_25.tgz", destfile = "shapes.tgz", 
+              quiet = TRUE)
+
+# Uncompress shapes file
+
+untar("shapes.tgz")
+
+# Read data into a tibble
+
+shapes_data <- read_sf("ct_hartford_shapefiles/Hartford_Neighborhoods.shp")
+
+# Delete the old files to keep environment tidy
+
+file_delete(c("shapes.tgz", "ct_hartford_shapefiles/"))
+
+```
+
+```{r stops, echo=FALSE, warning=FALSE}
+
+# We want to see the distribution of stops in Hartford on a minute basis within an hour. Thus, we need to extract the minute value associated with each stop
+
+hartford$datetimeminute <- 
+  
+  # To use lubridate functions for easily extracting the minute value, combining the date and time columns of the given data was neccessary to create something recognizable as a datetime object
+  
+  paste(hartford$date, hartford$time) %>% 
+  
+  # The string created in the previous command could be easily parsed as a datetime
+  
+  as_datetime() %>% 
+  
+  # Now using the lubridate package, the associated minute could be parsed out. This was assigned to a new column in the dataframe
+  
+  minute()
+
+hartford %>% 
+  
+  # Now, we create a bar plot of the stops in hartford based on the value of their associated minute within the hour
+  
+  ggplot(aes(x = datetimeminute)) + 
+  
+  geom_bar() + 
+  
+  # After exploring the ggthemes package a little more, I now intend to use the clean theme "few" for all my plots
+  
+  theme_few() +
+  
+  # Adding appropriate labels helps to contextualize the image
+  
+  labs(
+    title = "Minute Distribution of Police Stops in Hartford, CT", 
+    subtitle = "Stops spike at the beginning of an hour, halfway through, and at times ending in :05", 
+    caption = "Source: Stanford Open Policing Project", 
+    x = "Minute", y = "Total Stops") 
+
+```
+
+```{r map, echo=FALSE}
+
+# For my static map, I thought it would be interesting to investigate juvenille / youth arrests in Hartford, CT. As someone still undergoing the process of obtaining my license, this is a subpopulation that I thought might have interesting trends. 
+
+# Overall, we can expect there will be fewer young drivers stopped - where are these drivers being stopped and what kind of drivers are they?
+
+youth_arrests <- hartford %>% 
+  
+  # Limit the date to arrests where the driver was 21 and under
+  
+  filter(arrest_made, subject_age <= 21) %>% 
+  
+  # Recode the subject_race variable such that the possible values have proper capitalizations and are more concise (important for the legend aesthetics)
+  
+  mutate(subject_race = fct_recode(subject_race, 
+                                   "White" = "white",
+                                   "Black" = "black",
+                                   "Hispanic" = "hispanic"))
+
+# In the first stage of developing a mapping, convert this data on youth arrests to sf data, with the given coordinate positioning system
+
+arrest_locations <- st_as_sf(youth_arrests, 
+                             coords = c("lng", "lat"), 
+                             crs = 4326) 
+
+# Create the mapping, using the shapes_data from the Hartford shape file to draw a polygonal map of Hartford
+
+ggplot(data = shapes_data) +
+  
+  # Make the inside of the Hartford map white for aesthetic purposes
+  
+  geom_sf(fill = "whitesmoke") +
+  
+  # Add a layer to the mapping with points at the coordinates of the youth arrests, making them slightly transparent to allow for visibility of slightly overlapping data, and coloring them by the race of the subject so as to provide even more information
+  
+  geom_sf(data = arrest_locations, 
+          alpha = 0.5, 
+          aes(fill = subject_race, color = subject_race)) +
+  
+  # Remove the gridlines for a cleaner plot
+  
+  coord_sf(datum=NA) +
+  
+  # Use the map theme from ggthemes for a cleaner plot
+  
+  theme_map() + 
+  
+  # Add proper labels to provide context for data displayed
+  
+  labs(title = "Location of Hartford Youth Arrests",
+       subtitle = "Drivers 21 and Under (2013 - 2016)", 
+       caption = "Source: Stanford Open Policing Project") +
+  
+  # Position legend at the bottom and with proper spacing between the legend elements
+  
+  theme(legend.position = "bottom", 
+        legend.title=element_blank(), 
+        legend.text = element_text(
+          margin = margin(r = 10, unit = "pt")))
+
+```
